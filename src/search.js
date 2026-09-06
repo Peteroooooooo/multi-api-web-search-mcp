@@ -5,53 +5,23 @@
  */
 
 const DEFAULT_BASE_URL = "";
-const DEFAULT_MODEL = "gemini-3.8-flash";
-const FALLBACK_MODEL = "grok-chat-fast";
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
 
-// 常用模型别名映射表 (聚焦核心三大主力模型 + 双引擎混合模式)
-export const MODEL_ALIASES = {
-  // 1. Gemini 系列 - 快速全面结构化归纳 (首选默认)
-  gemini: "gemini-3.8-flash",
-  flash: "gemini-3.8-flash",
-  "gemini-flash": "gemini-3.8-flash",
-  "gemini-3.8": "gemini-3.8-flash",
-  "gemini-3.8-flash": "gemini-3.8-flash",
-  "gemini-high": "gemini-3.8-flash", // 避免旧配置触发 malformed_function_call，安全导向 3.8-flash
-  "gemini-3.7": "gemini-3.7-flash",
-  "gemini-3.7-flash": "gemini-3.7-flash",
-
-  // 2. Grok 系列 - 极速实时检索与 X/Twitter 热点 (15+ 原生引用)
-  fast: "grok-chat-fast",
-  grok: "grok-chat-fast",
-  "grok-fast": "grok-chat-fast",
-  "grok-chat": "grok-chat-fast",
-  "grok-chat-fast": "grok-chat-fast",
-
-  // 3. Grok 4.20 Multi-Agent - 多智能体自主深度调研与长篇研报
-  agent: "grok-4.20-multi-agent-0309",
-  "multi-agent": "grok-4.20-multi-agent-0309",
-  multiagent: "grok-4.20-multi-agent-0309",
-  "grok-agent": "grok-4.20-multi-agent-0309",
-  "4.20": "grok-4.20-multi-agent-0309",
-  "grok-4.20": "grok-4.20-multi-agent-0309",
-
-  // 4. 双模型协同 / 交叉混合模式 (Hybrid: Grok 实时引用 + Gemini 知识整合)
+// Universal mode aliases for multi-engine consensus
+export const MODE_ALIASES = {
   hybrid: "hybrid",
   both: "hybrid",
   all: "hybrid",
-  "dual-search": "hybrid",
-  universal: "hybrid",
-  "grok+gemini": "hybrid",
+  consensus: "hybrid",
 };
 
 export function resolveModel(inputModel) {
   if (!inputModel || typeof inputModel !== "string") {
-    return DEFAULT_MODEL;
+    return "";
   }
   const normalized = inputModel.trim().toLowerCase();
-  if (MODEL_ALIASES[normalized]) {
-    return MODEL_ALIASES[normalized];
+  if (MODE_ALIASES[normalized]) {
+    return MODE_ALIASES[normalized];
   }
   return inputModel.trim();
 }
@@ -80,7 +50,11 @@ export function getConfig() {
     defaultModel:
       env("MULTI_WEB_SEARCH_MODEL") ||
       env("WEB_SEARCH_MODEL") ||
-      env("GROK_WEB_SEARCH_MODEL", DEFAULT_MODEL),
+      "",
+    fallbackModel:
+      env("MULTI_WEB_SEARCH_FALLBACK_MODEL") ||
+      env("WEB_SEARCH_FALLBACK_MODEL") ||
+      "",
     forceNativeModels: (
       env("MULTI_WEB_SEARCH_FORCE_NATIVE") ||
       env("FORCE_NATIVE") ||
@@ -208,7 +182,7 @@ async function executeSearchRequest(targetModel, query, maxSources, system, cfg)
   }
 
   // 超时保护
-  const timeout = targetModel.includes("multi-agent") ? Math.max(cfg.timeoutMs, 180_000) : cfg.timeoutMs;
+  const timeout = cfg.timeoutMs;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
 
@@ -306,14 +280,19 @@ async function executeSearchRequest(targetModel, query, maxSources, system, cfg)
  * 核心多模型协同并行搜索 (Multi-Engine Hybrid Search: 动态读取配置的 2~N 个模型并行发起请求并交叉聚合)
  */
 async function executeHybridSearch(query, maxSources, system, cfg) {
-  const hybridConf = env("MULTI_WEB_SEARCH_HYBRID_MODELS", "grok-chat-fast,gemini-3.8-flash");
+  const hybridConf = env("MULTI_WEB_SEARCH_HYBRID_MODELS");
+  if (!hybridConf) {
+    throw new Error(
+      "Missing MULTI_WEB_SEARCH_HYBRID_MODELS environment variable for hybrid mode. Please configure a comma-separated list of models (e.g. MULTI_WEB_SEARCH_HYBRID_MODELS=modelA,modelB)."
+    );
+  }
   const modelList = hybridConf
     .split(",")
     .map((s) => resolveModel(s.trim()))
     .filter(Boolean);
 
   if (modelList.length === 0) {
-    modelList.push("grok-chat-fast", "gemini-3.8-flash");
+    throw new Error("No valid models found in MULTI_WEB_SEARCH_HYBRID_MODELS.");
   }
 
   // 100% 并发向全部 N 个模型发起搜索请求，互不阻塞
@@ -416,30 +395,36 @@ export async function webSearch(query, opts = {}) {
       "Do not invent URLs.",
     ].join(" ");
 
-  // 解析目标模型（支持别名）
+  // 解析目标模型（支持通用别名）
   const requestedModel = opts.model ? resolveModel(opts.model) : cfg.defaultModel;
+  if (!requestedModel) {
+    throw new Error(
+      "No search model specified. Please provide 'model' in your request or set MULTI_WEB_SEARCH_MODEL in your environment."
+    );
+  }
 
-  // 1. 如果请求的是混合多模型模式 (hybrid / both / all)
+  // 1. 如果请求的是混合多模型模式 (hybrid / both / all / consensus)
   if (requestedModel === "hybrid") {
     return await executeHybridSearch(q, maxSources, system, cfg);
   }
 
-  // 2. 单模型请求逻辑（带自动降级保护）
+  // 2. 单模型请求逻辑（若配置了 MULTI_WEB_SEARCH_FALLBACK_MODEL 则支持降级）
   try {
     return await executeSearchRequest(requestedModel, q, maxSources, system, cfg);
   } catch (primaryErr) {
-    const shouldFallback = opts.enableFallback !== false && requestedModel !== FALLBACK_MODEL;
+    const fallbackModel = cfg.fallbackModel;
+    const shouldFallback = opts.enableFallback !== false && fallbackModel && requestedModel !== fallbackModel;
     if (shouldFallback) {
       console.error(
-        `[multi-search-mcp] Primary model [${requestedModel}] failed: ${primaryErr.message}. Falling back to [${FALLBACK_MODEL}]...`
+        `[multi-search-mcp] Primary model [${requestedModel}] failed: ${primaryErr.message}. Falling back to [${fallbackModel}]...`
       );
       try {
-        const fallbackRes = await executeSearchRequest(FALLBACK_MODEL, q, maxSources, system, cfg);
+        const fallbackRes = await executeSearchRequest(fallbackModel, q, maxSources, system, cfg);
         fallbackRes.fallbackFrom = requestedModel;
         return fallbackRes;
       } catch (fallbackErr) {
         throw new Error(
-          `Both primary [${requestedModel}] and fallback [${FALLBACK_MODEL}] failed.\nPrimary error: ${primaryErr.message}\nFallback error: ${fallbackErr.message}`
+          `Both primary [${requestedModel}] and fallback [${fallbackModel}] failed.\nPrimary error: ${primaryErr.message}\nFallback error: ${fallbackErr.message}`
         );
       }
     }

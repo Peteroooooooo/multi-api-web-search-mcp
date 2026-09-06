@@ -20,7 +20,7 @@ const querySchema = {
     .string()
     .optional()
     .describe(
-      "Optional search engine mode or model name (e.g. 'gemini', 'grok', 'fast', 'hybrid' for multi-engine consensus)."
+      "Optional model name supported by your API endpoint, or 'hybrid' for multi-engine consensus."
     ),
   max_sources: z
     .number()
@@ -62,7 +62,7 @@ async function runSearch({ query, model, max_sources }) {
 async function main() {
   const cfg = getConfig();
   console.error(
-    `[multi-api-web-search] defaultModel=${cfg.defaultModel} base=${cfg.baseUrl} key=${cfg.apiKey ? "set" : "MISSING"}`
+    `[multi-api-web-search] defaultModel=${cfg.defaultModel || "(none)"} base=${cfg.baseUrl} key=${cfg.apiKey ? "set" : "MISSING"}`
   );
 
   const server = new McpServer(
