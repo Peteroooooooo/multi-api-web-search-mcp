@@ -58,8 +58,8 @@ Select your preferred model or input multiple indices (e.g. `1, 5, 2`) for Conse
         "MULTI_WEB_SEARCH_BASE_URL": "https://api.your-provider.com/v1",
         "MULTI_WEB_SEARCH_API_KEY": "sk-your-key",
         "MULTI_WEB_SEARCH_MODEL": "hybrid",
-        "MULTI_WEB_SEARCH_HYBRID_MODELS": "grok-chat-fast,gemini-3.8-flash,gpt-5-6",
-        "MULTI_WEB_SEARCH_FORCE_NATIVE": "gpt-5,gemini"
+        "MULTI_WEB_SEARCH_HYBRID_MODELS": "model-a,model-b",
+        "MULTI_WEB_SEARCH_FORCE_NATIVE": "model-a"
       }
     }
   }
@@ -77,8 +77,7 @@ Select your preferred model or input multiple indices (e.g. `1, 5, 2`) for Conse
       "env": {
         "MULTI_WEB_SEARCH_BASE_URL": "https://api.your-provider.com/v1",
         "MULTI_WEB_SEARCH_API_KEY": "sk-your-key",
-        "MULTI_WEB_SEARCH_MODEL": "gemini-3.8-flash",
-        "MULTI_WEB_SEARCH_FORCE_NATIVE": "gpt-5,gemini"
+        "MULTI_WEB_SEARCH_MODEL": "gpt-4o-mini"
       }
     }
   }
@@ -91,17 +90,18 @@ Select your preferred model or input multiple indices (e.g. `1, 5, 2`) for Conse
 | :--- | :---: | :--- | :--- |
 | `MULTI_WEB_SEARCH_BASE_URL` | Yes | - | OpenAI-compatible endpoint base URL |
 | `MULTI_WEB_SEARCH_API_KEY` | Yes | - | API key |
-| `MULTI_WEB_SEARCH_MODEL` | No | `gemini-3.8-flash` | Default search model (or `hybrid`) |
-| `MULTI_WEB_SEARCH_HYBRID_MODELS` | No | `grok-chat-fast,gemini-3.8-flash` | Comma-separated models for consensus search |
-| `MULTI_WEB_SEARCH_FORCE_NATIVE` | No | - | Comma-separated models forced to use Native Grounding (prevents 504 timeouts) |
-| `MULTI_WEB_SEARCH_TIMEOUT_MS` | No | `90000` | Upstream request timeout in ms |
+| `MULTI_WEB_SEARCH_MODEL` | No | - | Default search model (or `hybrid`) |
+| `MULTI_WEB_SEARCH_FALLBACK_MODEL` | No | - | Fallback model if primary model fails |
+| `MULTI_WEB_SEARCH_HYBRID_MODELS` | No | - | Comma-separated models for consensus search (required if `model='hybrid'`) |
+| `MULTI_WEB_SEARCH_FORCE_NATIVE` | No | - | Comma-separated models forced to use Native Grounding (prevents tool timeout) |
+| `MULTI_WEB_SEARCH_TIMEOUT_MS` | No | `60000` | Upstream request timeout in ms (default: 60s) |
 
 ## Tool Parameters
 
 The MCP server registers `multi_api_web_search` and alias `web_search`:
 
 - `query` *(string, required)*: Search query.
-- `model` *(string, optional)*: Override search model for this request (e.g. `grok`, `gemini`, `gpt-5-6`, `hybrid`).
+- `model` *(string, optional)*: Override search model for this request (e.g. `gpt-4o-mini`, `hybrid`, or any model supported by your endpoint).
 - `max_sources` *(number, optional)*: Maximum sources to return (default: 15).
 
 ## License
