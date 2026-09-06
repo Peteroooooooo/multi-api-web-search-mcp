@@ -8,10 +8,8 @@ Universal multi-model web search MCP server with precision capability probing, d
 
 ## Features
 
-- **Dual-Mode Routing**: Seamlessly dispatches between `Native Grounding` (fast, silent cloud retrieval) and `Explicit Tool` (`web_search` tool calling with rich citations).
-- **Precision Capability Matrix**: Built-in benchmarking utility (`doctor.bat` / `npm run doctor`) with objective ground-truth scoring and 4-worker pipeline.
-- **Multi-Engine Consensus**: Query multiple models concurrently (e.g. Grok + Gemini + GPT-5), merge perspectives, and deduplicate citations.
-- **504 Auto-Rescue**: Automatically strips tools and rescues with Native Grounding when upstream web scrapers time out.
+- **Dual-Mode Routing**: Benchmark and dispatch between `Native Grounding` (fast, silent retrieval) and `Explicit Tool` (`web_search` tool calling with rich citations).
+- **Multi-Engine Consensus**: Query multiple models concurrently (`Hybrid`), cross-verify perspectives, and deduplicate citations.
 
 ## Quick Start
 
@@ -103,7 +101,7 @@ Select your preferred model or input multiple indices (e.g. `1, 5, 2`) for Conse
 The MCP server registers `multi_api_web_search` and alias `web_search`:
 
 - `query` *(string, required)*: Search query.
-- `model` *(string, optional)*: Override search model for this request (e.g. `grok`, `gemini`, `gpt-5-6`, `hybrid`, `agent`).
+- `model` *(string, optional)*: Override search model for this request (e.g. `grok`, `gemini`, `gpt-5-6`, `hybrid`).
 - `max_sources` *(number, optional)*: Maximum sources to return (default: 15).
 
 ## License
