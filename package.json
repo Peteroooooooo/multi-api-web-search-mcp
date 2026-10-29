@@ -1,7 +1,7 @@
 {
   "name": "multi-api-web-search-mcp",
-  "version": "2.3.0",
-  "description": "Multi API Web Search (MCP) - Universal Multi-Model Web Search Aggregator with Precision Model Probing, Multi-Engine Consensus, and Auto-Fallback",
+  "version": "2.4.0",
+  "description": "Multi API Web Search (MCP) - live web search through any OpenAI-compatible endpoint, with model benchmarking, per-model search modes, multi-model search, and fallback",
   "type": "module",
   "bin": {
     "multi-api-web-search": "./src/index.js",
@@ -10,7 +10,9 @@
   "main": "./src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "doctor": "node bin/doctor.js"
+    "doctor": "node bin/doctor.js --manual",
+    "setup": "node bin/doctor.js --auto",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
