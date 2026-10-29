@@ -38,10 +38,13 @@ echo Press any key when you have saved your .env file...
 pause >nul
 
 :RUN
-echo Starting Model Arena...
-echo.
+if not "%~1"=="" (
+  node "bin\doctor.js" %*
+  goto DONE
+)
 node "bin\doctor.js"
 
+:DONE
 echo.
 echo ================================================================
 echo Process finished. Press any key to exit...
