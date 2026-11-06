@@ -84,7 +84,7 @@ Variables set in the client's `env` block override `.env`. Leave them out unless
 | `MULTI_WEB_SEARCH_FALLBACK_MODEL` | No | - | Model to retry with when the default fails |
 | `MULTI_WEB_SEARCH_TIMEOUT_MS` | No | `25000` | Max wait for the first word of the answer, per attempt. The model searches during this time; healthy answers start in 3-12 s. A request that stays silent this long is dropped and sent once more, which usually reaches a working upstream account. Requests are streamed, so once text starts the call keeps going while it arrives, up to 180 s in total |
 | `MULTI_WEB_SEARCH_IDLE_TIMEOUT_MS` | No | `30000` | After output starts, how long a silent stream may stay quiet before it is cut. Grok can pause about 15 s mid-answer to run another search. A cut stream returns what it has, marked as possibly cut off |
-| `MULTI_WEB_SEARCH_REASONING_EFFORT` | No | not sent | `low` / `medium` / `high`, sent with every request. A model that answers 400 to it is retried once without it, and the parameter is skipped for that model afterwards |
+| `MULTI_WEB_SEARCH_REASONING_EFFORT` | No | not sent | `low` / `medium` / `high`, sent with every request. A model that rejects it (a 400 naming the parameter, or a 422 such as ChatGPT relays return) is retried once without it, and the parameter is skipped for that model afterwards |
 | `MULTI_WEB_SEARCH_FOCUS` | No | none | Default `focus` (`broad` or `precise`) for calls that don't set one. Callers can pass `normal` to skip it |
 | `MULTI_WEB_SEARCH_ALIAS` | No | off | `1` also exposes the tool as `web_search` |
 
@@ -92,7 +92,7 @@ Variables set in the client's `env` block override `.env`. Leave them out unless
 
 ## Tool
 
-`multi_api_web_search` returns an answer and a numbered source list as plain text.
+`multi_api_web_search` returns an answer and a numbered source list as plain text. Links that differ only in `utm_*` tracking parameters count as one source. When the endpoint sends its sources as data and also repeats them as a `Sources:` list at the end of the answer (chatgpt2api tool mode does), that copy is removed from the answer.
 
 - `query` *(string, required)*: search query or question.
 - `model` *(string, optional)*: a model name or `hybrid`. The tool description lists your configured models.
