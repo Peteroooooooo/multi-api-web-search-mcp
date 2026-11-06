@@ -1,6 +1,6 @@
 {
   "name": "multi-api-web-search-mcp",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "Multi API Web Search (MCP) - live web search through any OpenAI-compatible endpoint, with model benchmarking, per-model search modes, multi-model search, and fallback",
   "type": "module",
   "bin": {
