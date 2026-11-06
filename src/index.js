@@ -41,7 +41,12 @@ function describeModels(cfg) {
 
 function buildSchema(cfg) {
   return {
-    query: z.string().min(1).describe("Search query or research question in natural language."),
+    query: z
+      .string()
+      .min(1)
+      .describe(
+        "Search query or research question in natural language. If it concerns a particular country, region or community, name it in the query (e.g. 'China's private pension deduction cap', not just 'private pension deduction cap'). Write it in the language with the best sources: usually English for technical topics, the local language for local topics; if unsure, include key terms in both."
+      ),
     model: z.string().optional().describe(describeModels(cfg)),
     max_sources: z
       .number()
