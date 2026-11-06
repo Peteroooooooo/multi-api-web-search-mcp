@@ -86,6 +86,7 @@ Variables set in the client's `env` block override `.env`. Leave them out unless
 | `MULTI_WEB_SEARCH_IDLE_TIMEOUT_MS` | No | `30000` | After output starts, how long a silent stream may stay quiet before it is cut. Grok can pause about 15 s mid-answer to run another search. A cut stream returns what it has, marked as possibly cut off |
 | `MULTI_WEB_SEARCH_REASONING_EFFORT` | No | not sent | `low` / `medium` / `high`, sent with every request. A model that rejects it (a 400 naming the parameter, or a 422 such as ChatGPT relays return) is retried once without it, and the parameter is skipped for that model afterwards |
 | `MULTI_WEB_SEARCH_FOCUS` | No | none | Default `focus` (`broad` or `precise`) for calls that don't set one. Callers can pass `normal` to skip it |
+| `MULTI_WEB_SEARCH_LANGUAGE` | No | `topic` | Which languages the model searches in. `topic`: the query's language, plus English for technical or international topics, plus the local language for local topics (Chinese whenever the question may concern China, even if asked in English). `bilingual`: always English and Chinese. Both answer in the query's language |
 | `MULTI_WEB_SEARCH_ALIAS` | No | off | `1` also exposes the tool as `web_search` |
 
 `FORCE_TOOL` / `FORCE_NATIVE` entries match an exact model name or a fragment (`gemini` matches `gemini-3.8-flash`). An exact name beats a fragment. Models in neither list use tool mode if their name contains `grok`, `gpt` or `search`.
@@ -101,6 +102,16 @@ Variables set in the client's `env` block override `.env`. Leave them out unless
 - `reasoning_effort` *(`low` | `medium` | `high`, optional)*: overrides the default for one call.
 
 No `temperature` is sent, so each model uses its own default. Gemini 3 models are tuned for their default of 1.0. A model that returns an empty answer counts as failed, so the fallback model or the other hybrid models take over.
+
+### Search language
+
+The search model, not this server, picks the search terms, so the language rule lives in its instructions. In a test of 24 questions (14 about China, 8 about the US or English-language communities, 2 with good sources in both), each asked in Chinese and in English on two models, with no rule:
+
+- English questions about China that did not name the country failed: asked for the annual pre-tax cap on private pension contributions, both models replied "which country?", and a question about delivery riders' views got 1 Chinese source out of 24.
+- `bilingual` fixed those, but answered 3 Chinese questions in English and added 25-33% Chinese sources to questions that had good English ones.
+- The shipped `topic` rule (plus "never reply with a clarifying question; answer the most likely reading") answered all 28 checkable questions correctly in both languages on both models, the pension question 6 of 6 times when asked in English. English questions about China drew 78% Chinese sources on `auto`; English-topic questions stayed at 0-1% Chinese sources, and answer time stayed at 8-12 s.
+
+Calling agents mostly pick the query language by topic already: Claude Code and Codex both searched in Chinese when asked in English about a Chinese channel, and in English when asked in Chinese about Node.js. The `query` description also asks them to name the country or region in the query.
 
 ## Development
 

@@ -323,6 +323,28 @@ test("focus picks the system prompt, and every prompt carries today's date", asy
   assert.equal(lastSystem, "custom");
 });
 
+test("every built-in prompt carries the language rule; MULTI_WEB_SEARCH_LANGUAGE picks it", async () => {
+  for (const focus of [undefined, "precise", "broad"]) {
+    await searchOnce("grok-ok", "q", { cfg: cfg(), focus });
+    assert.match(lastSystem, /also search in Chinese, even when the question is in English/);
+    assert.match(lastSystem, /original English sources rather than translated copies/);
+    assert.match(lastSystem, /Answer in the language of the query/);
+    await searchOnce("grok-ok", "q", { cfg: cfg({ language: "bilingual" }), focus });
+    assert.match(lastSystem, /Always search in both English and Chinese/);
+  }
+  const saved = { ...process.env };
+  try {
+    delete process.env.MULTI_WEB_SEARCH_LANGUAGE;
+    assert.equal(getConfig().language, "topic");
+    process.env.MULTI_WEB_SEARCH_LANGUAGE = "Bilingual";
+    assert.equal(getConfig().language, "bilingual");
+    process.env.MULTI_WEB_SEARCH_LANGUAGE = "bogus";
+    assert.equal(getConfig().language, "topic");
+  } finally {
+    process.env = saved;
+  }
+});
+
 test("MULTI_WEB_SEARCH_FOCUS sets the default focus; 'normal' opts out per call", async () => {
   const saved = { ...process.env };
   try {

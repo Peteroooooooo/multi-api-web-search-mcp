@@ -49,7 +49,7 @@ export const FOCUS_PROMPTS = {
   ].join(" "),
   broad: [
     "You are an exploratory research assistant backed by live web search.",
-    "Cover the topic as widely as you can: search several times with different phrasings, angles and synonyms, in English and in the language of the query, and across source types (papers, official sites, news, forums, code repositories).",
+    "Cover the topic as widely as you can: search several times with different phrasings, angles and synonyms, and across source types (papers, official sites, news, forums, code repositories).",
     "Prefer many distinct items over depth on one. Include recent and lesser-known items, not only the mainstream ones.",
     "Group the findings into distinct directions. For each item give one or two sentences on what it is and what makes it different, plus its source and date.",
     "Mark items you could not verify.",
@@ -59,13 +59,36 @@ export const FOCUS_PROMPTS = {
 };
 export const FOCUSES = Object.keys(FOCUS_PROMPTS);
 
+// Which languages the model searches in. Measured on 24 questions x 2 query languages x 2 models:
+// without a rule, an English question about a Chinese topic that does not name the country
+// (e.g. a pension deduction cap) got "which country?" or English second-hand sources.
+// "topic" fixed those without adding Chinese sources to English topics; "bilingual" did too,
+// but sometimes answered a Chinese question in English and added Chinese sources everywhere.
+export const LANGUAGE_PROMPTS = {
+  topic: [
+    "Search where the best sources are: in the language of the query, plus English for technical, scientific or international topics, plus the local language for topics about a country, region or local community.",
+    "If the question is about China or a Chinese-speaking community (its policies, prices, places, platforms, companies or users), also search in Chinese, even when the question is in English and does not name the country.",
+    "For general technical topics, use the original English sources rather than translated copies.",
+    "Answer in the language of the query.",
+  ].join(" "),
+  bilingual: [
+    "Always search in both English and Chinese, whatever language the query is in, and use the best sources from both.",
+    "Answer in the language of the query.",
+  ].join(" "),
+};
+export const LANGUAGES = Object.keys(LANGUAGE_PROMPTS);
+export const DEFAULT_LANGUAGE = "topic";
+
 function localDate() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
-export function buildSystemPrompt(focus) {
-  return `${FOCUS_PROMPTS[focus] || DEFAULT_SYSTEM_PROMPT} Today is ${localDate()}.`;
+export function buildSystemPrompt(focus, language = DEFAULT_LANGUAGE) {
+  const lang = LANGUAGE_PROMPTS[language] || LANGUAGE_PROMPTS[DEFAULT_LANGUAGE];
+  // The caller is an agent that cannot answer a follow-up, so "which country?" is a dead end.
+  const noAsk = "Never reply with a clarifying question: if the question is ambiguous, answer the most likely reading and briefly name the others.";
+  return `${FOCUS_PROMPTS[focus] || DEFAULT_SYSTEM_PROMPT} ${lang} ${noAsk} Today is ${localDate()}.`;
 }
 
 export const MODE_ALIASES = {
@@ -106,6 +129,7 @@ export function getConfig() {
     idleTimeoutMs: Number(env("MULTI_WEB_SEARCH_IDLE_TIMEOUT_MS")) || DEFAULT_IDLE_TIMEOUT_MS,
     reasoningEffort: env("MULTI_WEB_SEARCH_REASONING_EFFORT").toLowerCase(),
     focus: FOCUSES.includes(env("MULTI_WEB_SEARCH_FOCUS").toLowerCase()) ? env("MULTI_WEB_SEARCH_FOCUS").toLowerCase() : "",
+    language: LANGUAGES.includes(env("MULTI_WEB_SEARCH_LANGUAGE").toLowerCase()) ? env("MULTI_WEB_SEARCH_LANGUAGE").toLowerCase() : DEFAULT_LANGUAGE,
   };
 }
 
@@ -402,7 +426,7 @@ export async function searchOnce(targetModel, query, opts = {}) {
   const body = {
     model: targetModel,
     messages: [
-      { role: "system", content: opts.system || buildSystemPrompt(opts.focus) },
+      { role: "system", content: opts.system || buildSystemPrompt(opts.focus, cfg.language) },
       { role: "user", content: query },
     ],
   };
