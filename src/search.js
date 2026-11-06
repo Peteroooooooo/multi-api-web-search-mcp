@@ -191,6 +191,30 @@ function extractCitations(data, message) {
   return out;
 }
 
+// ChatGPT tags every cited link with ?utm_source=chatgpt.com, so one page arrives twice. Drop
+// utm_* tracking parameters so the copies compare equal.
+function cleanUrl(url) {
+  if (!url || !/[?&]utm_/i.test(url)) return url;
+  try {
+    const u = new URL(url);
+    for (const k of [...u.searchParams.keys()]) if (/^utm_/i.test(k)) u.searchParams.delete(k);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+// chatgpt2api's tool mode ends the answer with "Sources:\n1. title - url ..." built from the same
+// search_sources it sends as data. The list is printed once below the answer, so drop the copy:
+// in broad answers it was 60-85% of the text, and its entries without a title glue two URLs together.
+function stripSourcesBlock(text) {
+  const at = text.lastIndexOf("\nSources:\n");
+  if (at < 0) return text;
+  const lines = text.slice(at + 10).split("\n").filter((l) => l.trim());
+  if (!lines.length || !/^\d+\.\s/.test(lines[0].trim()) || !lines.every((l) => /https?:\/\//.test(l))) return text;
+  return text.slice(0, at).trimEnd();
+}
+
 function normalizeSources(raw) {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -385,15 +409,19 @@ export async function searchOnce(targetModel, query, opts = {}) {
   const effort = opts.reasoningEffort || cfg.reasoningEffort;
   if (effort && !effortRejected.has(targetModel)) body.reasoning_effort = effort;
 
-  // Endpoints that don't know reasoning_effort answer 400; retry once without it.
+  // Endpoints that don't know reasoning_effort answer 400 naming it. chatgpt2api passes it on to
+  // ChatGPT, which answers 422 (relayed as a 502 quoting "status=422"). Retry once without it.
   // Each attempt waits up to timeoutMs for the first word; once text flows it may run to the total cap.
   const post = async () => {
     const streamOpts = { until: start + MAX_TOTAL_MS };
     const first = await postChat(cfg, body, timeoutMs, opts.signal, streamOpts);
-    if (!body.reasoning_effort || first.status !== 400 || !/reasoning/i.test(first.text)) return first;
+    if (!body.reasoning_effort || first.ok) return first;
+    const named = first.status === 400 && /reasoning/i.test(first.text);
+    if (!named && first.status !== 422 && !/\bstatus=422\b/.test(first.text)) return first;
     delete body.reasoning_effort;
-    effortRejected.add(targetModel);
-    return postChat(cfg, body, timeoutMs, opts.signal, streamOpts);
+    const second = await postChat(cfg, body, timeoutMs, opts.signal, streamOpts);
+    if (named || second.ok) effortRejected.add(targetModel);
+    return second;
   };
 
   let usedMode = mode;
@@ -443,16 +471,18 @@ export async function searchOnce(targetModel, query, opts = {}) {
 
   const choice = data?.choices?.[0] || {};
   const message = choice.message || {};
-  let sources = normalizeSources(data.search_sources || data.web_search_results);
-  const seen = new Set(sources.map((s) => s.url).filter(Boolean));
-  for (const c of extractCitations(data, message)) {
-    if (!seen.has(c.url)) {
-      sources.push(c);
-      seen.add(c.url);
-    }
-  }
+  const listed = normalizeSources(data.search_sources || data.web_search_results);
   // Reasoning models behind some relays leak their <think> block into the content.
-  const answer = String(message.content || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  let answer = String(message.content || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  if (listed.some((s) => s.url)) answer = stripSourcesBlock(answer);
+  let sources = [];
+  const seen = new Set();
+  for (const s of [...listed, ...extractCitations(data, { ...message, content: answer })]) {
+    const url = cleanUrl(s.url);
+    if (url && seen.has(url)) continue;
+    if (url) seen.add(url);
+    sources.push({ ...s, url });
+  }
   if (!answer) {
     const finish = choice.finish_reason ? ` (finish_reason: ${choice.finish_reason})` : "";
     if (rescuedFrom) {
