@@ -120,6 +120,42 @@ before(async () => {
             return res.end(JSON.stringify({ error: { message: "Unsupported parameter: 'reasoning_effort' is not supported with this model." } }));
           }
           return reply(res, body.model, withTools);
+        case "effort-422":
+          // chatgpt2api relays ChatGPT's 422 for an unknown thinking effort as a 502.
+          if (body.reasoning_effort) {
+            res.writeHead(502, { "Content-Type": "application/json" });
+            return res.end(JSON.stringify({ error: { message: "/backend-api/conversation failed: status=422, body=" } }));
+          }
+          return reply(res, body.model, withTools);
+        case "chatgpt-tool": {
+          // chatgpt2api tool mode: text deltas, then a last content chunk that appends a "Sources:" block
+          // and carries annotations + search_sources (ChatGPT adds ?utm_source=chatgpt.com, titles can be empty).
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+          const listed = [
+            { title: "Go releases", url: "https://go.dev/doc/devel/release", snippet: "" },
+            { title: "Go releases", url: "https://go.dev/doc/devel/release?utm_source=chatgpt.com", snippet: "" },
+            { title: "", url: "https://go.dev/dl/", snippet: "" },
+          ];
+          send({ model: body.model, choices: [{ delta: { role: "assistant", content: "Go **1.27.3** is current. " } }] });
+          send({
+            model: body.model,
+            search_sources: listed,
+            choices: [{
+              delta: {
+                content: "See [Go releases](https://go.dev/doc/devel/release?utm_source=chatgpt.com).\n\nSources:\n1. Go releases - https://go.dev/doc/devel/release\n2. Go releases - https://go.dev/doc/devel/release?utm_source=chatgpt.com\n3. https://go.dev/dl/https://go.dev/dl/",
+                annotations: [{ type: "url_citation", url_citation: { url: "https://go.dev/doc/devel/release?utm_source=chatgpt.com", title: "Go releases" } }],
+              },
+            }],
+          });
+          send({ model: body.model, choices: [{ delta: {}, finish_reason: "stop" }] });
+          return res.end("data: [DONE]\n\n");
+        }
+        case "sources-heading":
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return res.end(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "Answer.\n\nSources:\n1. Docs - https://example.com/docs" } }] })
+          );
         case "empty":
           res.writeHead(200, { "Content-Type": "application/json" });
           return res.end(JSON.stringify({ choices: [{ finish_reason: "malformed_function_call", message: { content: "" } }] }));
@@ -244,6 +280,26 @@ test("a model that rejects reasoning_effort is retried without it, then skipped"
   );
 });
 
+test("a relayed 422 for reasoning_effort in native mode is retried without it, then skipped", async () => {
+  requests.length = 0;
+  const c = cfg({ reasoningEffort: "low", forceNativeModels: ["effort-422"] });
+  const first = await searchOnce("effort-422", "q", { cfg: c });
+  assert.equal(first.mode, "native");
+  assert.equal(first.reasoningEffort, null);
+  await searchOnce("effort-422", "q", { cfg: c });
+  assert.deepEqual(
+    requests.map((r) => [r.withTools, r.effort]),
+    [[false, "low"], [false, undefined], [false, undefined]]
+  );
+});
+
+test("a plain gateway error is not mistaken for an effort rejection", async () => {
+  requests.length = 0;
+  const c = cfg({ reasoningEffort: "low", forceNativeModels: ["always-500"] });
+  await assert.rejects(searchOnce("always-500", "q", { cfg: c }), (err) => err.code === "HTTP_500");
+  assert.deepEqual(requests.map((r) => r.effort), ["low"]);
+});
+
 test("reasoning_effort is not sent unless configured", () => {
   const saved = { ...process.env };
   try {
@@ -312,6 +368,18 @@ test("an empty answer counts as a failure and triggers the fallback model", asyn
 test("bare URLs in the answer text count as sources", async () => {
   const r = await searchOnce("bare-urls", "q", { cfg: cfg() });
   assert.deepEqual(r.sources.map((s) => s.url), ["https://example.com/md", "https://nodejs.org/en/blog/release/v1", "https://x.org/page"]);
+});
+
+test("chatgpt2api tool answers: the appended Sources block is dropped and utm copies are merged", async () => {
+  const r = await searchOnce("chatgpt-tool", "q", { cfg: cfg({ forceToolModels: ["chatgpt-tool"] }) });
+  assert.equal(r.answer, "Go **1.27.3** is current. See [Go releases](https://go.dev/doc/devel/release?utm_source=chatgpt.com).");
+  assert.deepEqual(r.sources.map((s) => s.url), ["https://go.dev/doc/devel/release", "https://go.dev/dl/"]);
+});
+
+test("a Sources heading is kept when the endpoint sent no source list as data", async () => {
+  const r = await searchOnce("sources-heading", "q", { cfg: cfg({ forceNativeModels: ["sources-heading"] }) });
+  assert.match(r.answer, /Sources:\n1\. Docs - https:\/\/example\.com\/docs$/);
+  assert.deepEqual(r.sources.map((s) => s.url), ["https://example.com/docs"]);
 });
 
 test("grounding redirect links are resolved to the real page URLs", async () => {
