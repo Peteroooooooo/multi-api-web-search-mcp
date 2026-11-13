@@ -5,14 +5,17 @@
  * search, fallback models, and hard per-call timeouts.
  */
 
-// Max wait for the first word of the answer, per attempt. Measured on grok2api and AIStudio:
-// healthy answers start in 3-12 s (grok-chat-fast averages 4.8 s over 85 requests, 2 took over
-// 30 s); broken pooled accounts send nothing until the relay gives up at 120 s. So a silent
-// request is abandoned early and sent again, which usually lands on a working account.
+// Max wait for the first output (streamed thinking or answer text), per attempt. Measured on
+// grok2api and AIStudio: healthy answers start in 3-12 s (grok-chat-fast averages 4.8 s over 85
+// requests, 2 took over 30 s); broken pooled accounts send nothing until the relay gives up at
+// 120 s. So a silent request is abandoned early and sent again, which usually lands on a working
+// account. Thinking models such as gemini-4-hydrogen at high effort stream thinking within 6 s
+// but may think 40-80 s before the first answer word, so thinking counts as output.
 const DEFAULT_TIMEOUT_MS = 25_000;
 const MAX_ATTEMPTS = 2;
-// After the first output, a stream may keep going as long as data keeps arriving,
-// up to this total; it is cut after DEFAULT_IDLE_TIMEOUT_MS without data.
+// After the first output, a stream may keep going as long as thinking or text keeps arriving,
+// up to this total; it is cut after DEFAULT_IDLE_TIMEOUT_MS without either. Relay keep-alive
+// pings (": PING" lines) do not count, or a stuck stream would only stop at the total limit.
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 const MAX_TOTAL_MS = 180_000;
 const DEFAULT_MAX_SOURCES = 15;
@@ -290,10 +293,11 @@ function taggedError(message, code) {
 
 /**
  * One streamed POST to /chat/completions. `firstByteMs` limits the wait for the
- * first data event (search happens before it, with no bytes on the wire); after
- * that the call keeps going while data arrives and only stops after `idleMs`
- * of silence or at `until`. A stall after some content returns that partial
- * answer with finish_reason "stalled". Non-streaming JSON replies are passed through.
+ * first output, streamed thinking or answer text (search happens before it); after
+ * that the call keeps going while thinking or text arrives and only stops after
+ * `idleMs` without either, or at `until`. A stall after some answer text returns
+ * that partial answer with finish_reason "stalled"; a stall while still thinking
+ * fails with code STALLED. Non-streaming JSON replies are passed through.
  * Returns { status, ok, text } where text is a regular chat.completion JSON body.
  */
 async function postChat(cfg, body, firstByteMs, signal, { idleMs = cfg.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS, until = Infinity } = {}) {
@@ -316,11 +320,10 @@ async function postChat(cfg, body, firstByteMs, signal, { idleMs = cfg.idleTimeo
   signal?.addEventListener("abort", onCancel, { once: true });
 
   const acc = { content: "", annotations: [], citations: null, searchSources: null, usage: null, model: null, finish: null, error: null };
-  let gotData = false;
   const fail = (err) => {
     if (signal?.aborted) return taggedError("Search cancelled by client", "CANCELLED");
-    if (reason === "FIRST_BYTE") return taggedError(`no answer text after ${Math.round(firstByteMs / 1000)}s`, "TIMEOUT");
-    if (reason === "IDLE") return taggedError(`stream stalled: no output for ${Math.round(idleMs / 1000)}s`, "STALLED");
+    if (reason === "FIRST_BYTE") return taggedError(`no output after ${Math.round(firstByteMs / 1000)}s`, "TIMEOUT");
+    if (reason === "IDLE") return taggedError(`stream stalled while thinking: no output for ${Math.round(idleMs / 1000)}s`, "STALLED");
     if (reason === "TOTAL") return taggedError(`stopped at the ${Math.round(MAX_TOTAL_MS / 1000)}s total limit`, "TIMEOUT");
     return err;
   };
@@ -360,16 +363,13 @@ async function postChat(cfg, body, firstByteMs, signal, { idleMs = cfg.idleTimeo
       if (typeof delta.content === "string") acc.content += delta.content;
       if (Array.isArray(delta.annotations)) acc.annotations.push(...delta.annotations);
       if (choice.finish_reason) acc.finish = choice.finish_reason;
-      // Only real text proves the model is answering; grok2api sends an empty role chunk at once.
-      if (!gotData && acc.content) {
-        gotData = true;
-        arm(idleMs, "IDLE");
-      }
+      // Only real thinking or text proves the model is working; grok2api sends an empty role chunk at once.
+      const thinking = delta.reasoning_content || delta.reasoning;
+      if (delta.content || (typeof thinking === "string" && thinking)) arm(idleMs, "IDLE");
     };
 
     try {
       for await (const part of resp.body) {
-        if (gotData) arm(idleMs, "IDLE");
         buf += decoder.decode(part, { stream: true });
         let nl;
         while ((nl = buf.indexOf("\n")) >= 0) {
@@ -435,7 +435,7 @@ export async function searchOnce(targetModel, query, opts = {}) {
 
   // Endpoints that don't know reasoning_effort answer 400 naming it. chatgpt2api passes it on to
   // ChatGPT, which answers 422 (relayed as a 502 quoting "status=422"). Retry once without it.
-  // Each attempt waits up to timeoutMs for the first word; once text flows it may run to the total cap.
+  // Each attempt waits up to timeoutMs for the first thinking or text; once output flows it may run to the total cap.
   const post = async () => {
     const streamOpts = { until: start + MAX_TOTAL_MS };
     const first = await postChat(cfg, body, timeoutMs, opts.signal, streamOpts);
@@ -461,8 +461,10 @@ export async function searchOnce(targetModel, query, opts = {}) {
     try {
       resp = await post();
     } catch (err) {
-      // Silence means a stuck upstream (often one bad pooled account): drop it and ask again.
-      if (err.code !== "TIMEOUT" || !/no answer text/.test(err.message) || last) throw fail(err.message, err.code);
+      // Silence before any output, or while still thinking, means a stuck upstream (often one bad
+      // pooled account): drop it and ask again.
+      const stuck = (err.code === "TIMEOUT" && /no output after/.test(err.message)) || err.code === "STALLED";
+      if (!stuck || last) throw fail(err.message, err.code);
       retries.push(err.message);
       continue;
     }

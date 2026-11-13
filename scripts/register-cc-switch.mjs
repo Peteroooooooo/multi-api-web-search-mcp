@@ -25,7 +25,7 @@ if (fs.existsSync(envPath)) {
 const baseUrl = process.env.MULTI_WEB_SEARCH_BASE_URL || "https://api.your-provider.com/v1";
 const apiKey = process.env.MULTI_WEB_SEARCH_API_KEY || "YOUR_API_KEY_HERE";
 const defaultModel = process.env.MULTI_WEB_SEARCH_MODEL || "gemini-3.8-flash";
-const timeoutMs = process.env.MULTI_WEB_SEARCH_TIMEOUT_MS || "90000";
+const timeoutMs = process.env.MULTI_WEB_SEARCH_TIMEOUT_MS || "25000";
 
 const entryPoint = path.join(root, "src", "index.js").replace(/\\/g, "/");
 
