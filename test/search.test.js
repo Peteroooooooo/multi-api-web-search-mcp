@@ -16,6 +16,7 @@ const requests = [];
 let lastSystem = "";
 let blankOnceCalls = 0;
 let roleHangCalls = 0;
+let thinkStallCalls = 0;
 
 function reply(res, model, withTools) {
   res.writeHead(200, { "Content-Type": "application/json" });
@@ -83,6 +84,36 @@ before(async () => {
             if (body.model === "stream-stall") return; // stays open, sends nothing more
             send({ model: body.model, citations: ["https://example.com/c"], choices: [{ delta: {}, finish_reason: "stop" }], usage: { total_tokens: 42 } });
             res.end("data: [DONE]\n\n");
+          }, 250);
+          res.on("close", () => clearInterval(tick));
+          return;
+        }
+        case "think-slow":
+        case "ping-stall":
+        case "think-stall-once": {
+          // think-slow: thinking chunks for ~1.5 s, then the answer (gemini-4-hydrogen at high effort).
+          // ping-stall: one answer chunk, then only relay keep-alive comments.
+          // think-stall-once: first call thinks once and goes silent; the second call answers.
+          if (body.model === "think-stall-once") thinkStallCalls++;
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+          send({ model: body.model, choices: [{ delta: { role: "assistant", content: "" } }] });
+          if (body.model === "think-stall-once" && thinkStallCalls === 1) {
+            return send({ model: body.model, choices: [{ delta: { reasoning_content: "Planning searches" } }] });
+          }
+          const finish = () => {
+            send({ model: body.model, choices: [{ delta: { content: "Final answer." }, finish_reason: "stop" }] });
+            res.end("data: [DONE]\n\n");
+          };
+          if (body.model === "think-stall-once") return finish();
+          if (body.model === "ping-stall") send({ model: body.model, choices: [{ delta: { content: "partial " } }] });
+          let i = 0;
+          const tick = setInterval(() => {
+            if (body.model === "ping-stall") return res.write(": PING\n\n");
+            send({ model: body.model, choices: [{ delta: { reasoning_content: `thought ${i} ` } }] });
+            if (++i < 6) return;
+            clearInterval(tick);
+            finish();
           }, 250);
           res.on("close", () => clearInterval(tick));
           return;
@@ -431,6 +462,31 @@ test("a stream that goes silent returns the partial answer, marked as cut off", 
   assert.match(formatSearchResult(r), /answer may be cut off/);
 });
 
+test("streamed thinking counts as output, so a long think before the answer is not dropped", async () => {
+  requests.length = 0;
+  const start = Date.now();
+  const r = await searchOnce("think-slow", "q", { cfg: cfg({ forceToolModels: ["think-slow"], timeoutMs: 600, idleTimeoutMs: 600 }) });
+  assert.ok(Date.now() - start > 1400, "first answer word comes after the 0.6s first-output limit");
+  assert.equal(r.answer, "Final answer.");
+  assert.deepEqual(r.retries, []);
+  assert.equal(requests.length, 1);
+});
+
+test("relay keep-alive pings do not keep a stalled stream open", async () => {
+  const start = Date.now();
+  const r = await searchOnce("ping-stall", "q", { cfg: cfg({ forceToolModels: ["ping-stall"], timeoutMs: 5000, idleTimeoutMs: 600 }) });
+  assert.ok(Date.now() - start < 2000, `took ${Date.now() - start}ms`);
+  assert.equal(r.answer, "partial");
+  assert.equal(r.finishReason, "stalled");
+});
+
+test("a stream that goes silent while still thinking is asked again", async () => {
+  const r = await searchOnce("think-stall-once", "q", { cfg: cfg({ forceToolModels: ["think-stall-once"], timeoutMs: 5000, idleTimeoutMs: 500 }) });
+  assert.equal(thinkStallCalls, 2);
+  assert.equal(r.answer, "Final answer.");
+  assert.match(r.retries[0], /stalled while thinking: no output for 1s/);
+});
+
 test("a dropped blank stream is retried once, and a leaked <think> block is removed", async () => {
   const r = await searchOnce("blank-once", "q", { cfg: cfg({ forceToolModels: ["blank-once"] }) });
   assert.equal(blankOnceCalls, 2);
@@ -444,9 +500,9 @@ test("a silent stream (only an empty role chunk) is dropped early and asked agai
   const r = await searchOnce("role-hang-once", "q", { cfg: cfg({ forceToolModels: ["role-hang-once"], timeoutMs: 800 }) });
   assert.equal(roleHangCalls, 2);
   assert.equal(r.mode, "tool");
-  assert.match(r.retries[0], /no answer text after 1s/);
+  assert.match(r.retries[0], /no output after 1s/);
   assert.ok(Date.now() - start < 1500, "second attempt should start right after the first one's 0.8s limit");
-  assert.match(formatSearchResult(r), /asked again after: no answer text/);
+  assert.match(formatSearchResult(r), /asked again after: no output/);
 });
 
 test("tool HTTP 504 falls back to native mode", async () => {
@@ -472,7 +528,7 @@ test("a tool call that keeps hanging is retried once, then fails instead of wait
   const start = Date.now();
   await assert.rejects(
     searchOnce("tool-hang", "q", { cfg: cfg({ forceToolModels: ["tool-hang"], timeoutMs: 600 }) }),
-    (err) => err.code === "TIMEOUT" && /no answer text after 1s; then no answer text/.test(err.message)
+    (err) => err.code === "TIMEOUT" && /no output after 1s; then no output/.test(err.message)
   );
   const elapsed = Date.now() - start;
   assert.ok(elapsed < 1600, `took ${elapsed}ms`);
@@ -483,7 +539,7 @@ test("a call that never answers fails after two short attempts instead of hangin
   const start = Date.now();
   await assert.rejects(
     searchOnce("always-hang", "q", { cfg: cfg({ forceToolModels: ["always-hang"], timeoutMs: 1000 }) }),
-    (err) => err.code === "TIMEOUT" && /no answer text after 1s/.test(err.message)
+    (err) => err.code === "TIMEOUT" && /no output after 1s/.test(err.message)
   );
   const elapsed = Date.now() - start;
   assert.ok(elapsed < 2400, `took ${elapsed}ms`);
