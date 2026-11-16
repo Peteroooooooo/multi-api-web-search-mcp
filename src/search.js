@@ -264,7 +264,8 @@ function normalizeSources(raw) {
  */
 async function resolveRedirectSources(sources, timeoutMs, signal) {
   const targets = sources.filter((s) => REDIRECT_PATH.test(s.url || ""));
-  if (targets.length === 0 || timeoutMs <= 0) return sources;
+  const resolved = new Map();
+  if (targets.length === 0 || timeoutMs <= 0) return { sources, resolved };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.min(REDIRECT_TIMEOUT_MS, timeoutMs));
   const onCancel = () => controller.abort();
@@ -272,10 +273,14 @@ async function resolveRedirectSources(sources, timeoutMs, signal) {
   try {
     await Promise.all(
       targets.map(async (s) => {
+        const orig = s.url;
         try {
-          const resp = await fetch(s.url, { method: "HEAD", redirect: "manual", signal: controller.signal });
+          const resp = await fetch(orig, { method: "HEAD", redirect: "manual", signal: controller.signal });
           const location = resp.headers.get("location");
-          if (location && /^https?:\/\//.test(location)) s.url = location;
+          if (location && /^https?:\/\//.test(location)) {
+            s.url = location;
+            resolved.set(orig, location);
+          }
         } catch {}
       })
     );
@@ -284,7 +289,10 @@ async function resolveRedirectSources(sources, timeoutMs, signal) {
     signal?.removeEventListener("abort", onCancel);
   }
   const seen = new Set();
-  return sources.filter((s) => !s.url || (!seen.has(s.url) && seen.add(s.url)));
+  return {
+    sources: sources.filter((s) => !s.url || (!seen.has(s.url) && seen.add(s.url))),
+    resolved,
+  };
 }
 
 function taggedError(message, code) {
@@ -517,7 +525,20 @@ export async function searchOnce(targetModel, query, opts = {}) {
     }
     throw fail(`returned an empty answer in ${usedMode} mode${finish}`, "EMPTY");
   }
-  sources = await resolveRedirectSources(sources, Math.min(REDIRECT_TIMEOUT_MS, start + MAX_TOTAL_MS - Date.now()), opts.signal);
+  const { sources: resolvedSources, resolved } = await resolveRedirectSources(
+    sources,
+    Math.min(REDIRECT_TIMEOUT_MS, start + MAX_TOTAL_MS - Date.now()),
+    opts.signal
+  );
+  sources = resolvedSources;
+  if (resolved.size > 0) {
+    answer = answer.replace(/https?:\/\/[^\s<>"')\]`]+/g, (match) => {
+      if (resolved.has(match)) return resolved.get(match);
+      const clean = match.replace(/[.,;:!?*_]+$/, "");
+      const trail = match.slice(clean.length);
+      return resolved.has(clean) ? resolved.get(clean) + trail : match;
+    });
+  }
 
   return {
     query,

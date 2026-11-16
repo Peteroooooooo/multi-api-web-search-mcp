@@ -192,12 +192,21 @@ before(async () => {
           return res.end(JSON.stringify({ choices: [{ finish_reason: "malformed_function_call", message: { content: "" } }] }));
         case "gemini-redirect": {
           const origin = baseUrl.replace(/\/v1$/, "");
-          const cite = (id) => ({ type: "url_citation", url_citation: { title: "site.com", url: `${origin}/grounding-api-redirect/${id}` } });
+          const rurl = (id) => `${origin}/grounding-api-redirect/${id}`;
+          const cite = (id) => ({ type: "url_citation", url_citation: { title: "site.com", url: rurl(id) } });
           res.writeHead(200, { "Content-Type": "application/json" });
           return res.end(
             JSON.stringify({
               model: body.model,
-              choices: [{ finish_reason: "stop", message: { content: "Grounded answer.", annotations: [cite("p1"), cite("p1-dup"), cite("dead")] } }],
+              choices: [
+                {
+                  finish_reason: "stop",
+                  message: {
+                    content: `See [site](${rurl("p1")}), ${rurl("p1-dup")}. Dead: ${rurl("dead")} and prefix: ${rurl("p1/dead")}.`,
+                    annotations: [cite("p1"), cite("p1-dup"), cite("dead")],
+                  },
+                },
+              ],
             })
           );
         }
@@ -435,11 +444,16 @@ test("a Sources heading is kept when the endpoint sent no source list as data", 
   assert.deepEqual(r.sources.map((s) => s.url), ["https://example.com/docs"]);
 });
 
-test("grounding redirect links are resolved to the real page URLs", async () => {
+test("grounding redirect links are resolved in both sources and answer body", async () => {
   const r = await searchOnce("gemini-redirect", "q", { cfg: cfg({ forceToolModels: ["gemini-redirect"] }) });
   assert.deepEqual(
     r.sources.map((s) => s.url.replace(/^http:\/\/127\.0\.0\.1:\d+/, "")),
-    ["https://real.example.com/p1", "https://real.example.com/p1-dup", "/grounding-api-redirect/dead"]
+    ["https://real.example.com/p1", "https://real.example.com/p1-dup", "/grounding-api-redirect/dead", "/grounding-api-redirect/p1/dead"]
+  );
+  const origin = baseUrl.replace(/\/v1$/, "");
+  assert.equal(
+    r.answer,
+    `See [site](https://real.example.com/p1), https://real.example.com/p1-dup. Dead: ${origin}/grounding-api-redirect/dead and prefix: ${origin}/grounding-api-redirect/p1/dead.`
   );
 });
 
