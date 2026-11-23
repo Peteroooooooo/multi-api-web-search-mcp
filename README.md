@@ -1,17 +1,28 @@
 # Multi-API Web Search (MCP)
 
-Live web search for MCP clients through any OpenAI-compatible endpoint. A built-in doctor benchmarks your endpoint's models, picks the best search mode for each one, and writes the config for you.
+**English** | [简体中文](README_zh.md)
 
 [![MCP Compatible](https://img.shields.io/badge/MCP-Protocol-blue.svg)](https://modelcontextprotocol.io/)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18.0.0-green.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+Live web search for MCP clients through any OpenAI-compatible `/v1` endpoint. A built-in setup tool benchmarks your models, picks the best search mode (`native` or `tool`) for each one, and writes `.env` automatically.
+
 ## Features
 
-- **Per-model search mode**: each model runs either in `native` mode (the model searches silently) or `tool` mode (an explicit `web_search` tool, usually with more citations). The doctor measures both and saves the faster or more accurate one.
-- **Hybrid search**: ask 2+ models in parallel, get their answers side by side plus one merged, deduplicated source list.
-- **Never hangs, never cuts a working answer**: requests are streamed. A model gets `TIMEOUT_MS` (25 s) to search and send its first output, either streamed thinking or the first word of the answer; a request that stays silent is dropped and sent once more. After that it may keep thinking and writing as long as output keeps arriving, and it is only cut after `IDLE_TIMEOUT_MS` without any. Relay keep-alive pings don't count as output. A stream that goes silent while still thinking is sent once more; one that goes silent mid-answer returns what it has. If tool mode returns a gateway error, the same call retries once in native mode.
-- **Fallback model**: retry with a second model when the default one fails.
+- **Adaptive search mode**: supports both `native` search (built-in grounding) and `tool` search (explicit `web_search` tool call), automatically selecting the best mode per model.
+- **Hybrid search**: query 2+ models in parallel and get side-by-side answers with a merged, deduplicated source list (and resolved Gemini grounding redirect URLs).
+- **Stream-aware resilience**: tracks real streamed output (thinking or answer tokens, ignoring relay keep-alive pings), retries silent or stalled connections, and falls back to `MULTI_WEB_SEARCH_FALLBACK_MODEL` on failure.
+- **Smart query language**: automatically searches in the query's language plus English for technical topics and Chinese for China-related topics.
+
+## Free Web Search API Backends
+
+Any OpenAI-compatible provider or gateway (such as New API / One API) with search-capable models works out of the box. You can also self-host free web search API backends directly:
+
+- **ChatGPT Web Search**: deploy [chatgpt2api](https://github.com/Peteroooooooo/chatgpt2api) (or upstream [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api)) to expose ChatGPT's web search as an OpenAI-compatible `/v1` API.
+- **Gemini Web Search**: deploy [AIStudio2API](https://github.com/Peteroooooooo/AIStudio2API) (or upstream [Mag1cFall/AIStudio2API](https://github.com/Mag1cFall/AIStudio2API)) to expose Google AI Studio's Gemini models with Google Search grounding.
+
+Point `MULTI_WEB_SEARCH_BASE_URL` directly at either service, or put both behind an API gateway to run ChatGPT and Gemini together in `hybrid` mode.
 
 ## Quick Start
 
@@ -23,40 +34,40 @@ cd multi-api-web-search-mcp
 npm install
 ```
 
-### 2. Add your endpoint
+### 2. Configure endpoint
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in the two required lines in `.env`:
+Set your endpoint and key in `.env`:
 
 ```env
 MULTI_WEB_SEARCH_BASE_URL=https://api.your-provider.com/v1
 MULTI_WEB_SEARCH_API_KEY=sk-your-key-here
 ```
 
-### 3. Let it pick the models
+### 3. Benchmark & auto-configure models
 
 ```bash
 npm run setup
 ```
 
-On Windows you can double-click `doctor.bat` instead. It creates `.env` and opens it in Notepad if the file is missing, then asks whether setup should pick the winner (Auto) or show you the leaderboard (Manual).
+- Interactive checklist to select which models on your endpoint to test (or pass `-- --models a,b`, `-- --all`, `-- --hybrid`, `-- --single`).
+- Benchmarks accuracy, latency, and citation count in both `native` and `tool` modes, then writes the winning model, fallback model, and per-model modes to `.env`.
+- Run `npm run doctor` (or double-click `doctor.bat` on Windows) to inspect the leaderboard and pick models manually.
 
-Setup first lists every model on your endpoint as a checklist, because most endpoints serve many models that can't search, and only you know which are worth the requests. Move with ↑/↓, tick with Space, press Tab to tick everything shown, type to filter (`gemini` shows only Gemini models), and confirm with Enter. Models already in your `.env` start ticked. You can also skip the menu with `-- --models a,b`, or test everything with `-- --all`. From there setup decides by itself: it tests each chosen model in both search modes, then re-checks the best 4 on two more questions. All answers are graded against nodejs.org at run time, so the test never goes stale. The most accurate model wins. Among equally accurate models, one that is at least 25% faster wins; otherwise the one with more sources wins. The winner becomes the default model, and the runner-up becomes the fallback and the second hybrid model. Each model's search mode is saved, and so is `reasoning_effort=low` if the chosen models accept it. Each model costs 2 requests, plus 2 more for each of the top 4. If `.env` already has `MULTI_WEB_SEARCH_MODEL=hybrid`, setup keeps hybrid as the default and fills in the two best models. Add `-- --hybrid` or `-- --single` to choose explicitly.
+### 4. Register in MCP client
 
-To see the full leaderboard and choose the default yourself, run `npm run doctor` (or pick Manual in `doctor.bat`). It starts with the same checklist, and afterwards you tick one model for the default or two or more for hybrid.
+The server loads `.env` from its own directory, so the client config only needs the entry script path.
 
-### 4. Register the server
-
-The server reads `.env` itself, so the client config only needs the path. The doctor prints this command with your real path:
+**Claude Code:**
 
 ```bash
 claude mcp add -s user multi-api-web-search -- node "/path/to/multi-api-web-search-mcp/src/index.js"
 ```
 
-Other clients (Cursor `.cursor/mcp.json`, etc.):
+**Cursor / Claude Desktop (`mcp.json`):**
 
 ```json
 {
@@ -69,57 +80,35 @@ Other clients (Cursor `.cursor/mcp.json`, etc.):
 }
 ```
 
-Variables set in the client's `env` block override `.env`. Leave them out unless you want a per-client override. Otherwise, settings the doctor saves won't take effect.
+## Tool: `multi_api_web_search`
+
+Returns an answer with a numbered, deduplicated source list.
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :---: | :--- |
+| `query` | `string` (required) | - | Search query or question |
+| `model` | `string` | `.env` default | Specific model name or `hybrid` |
+| `max_sources` | `number` | `15` | Maximum sources to return (`1`–`30`) |
+| `focus` | `'normal' \| 'broad' \| 'precise'` | `'normal'` | `broad` for multi-angle deep research (up to 30 sources); `precise` for verifying a single latest fact |
+| `reasoning_effort` | `'low' \| 'medium' \| 'high'` | `.env` default | Per-call reasoning effort override |
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
-| :--- | :---: | :--- | :--- |
-| `MULTI_WEB_SEARCH_BASE_URL` | Yes | - | OpenAI-compatible endpoint base URL |
-| `MULTI_WEB_SEARCH_API_KEY` | Yes | - | API key for that endpoint |
-| `MULTI_WEB_SEARCH_MODEL` | No | - | Default model, or `hybrid` |
-| `MULTI_WEB_SEARCH_HYBRID_MODELS` | No | - | Comma-separated models used by `hybrid` |
-| `MULTI_WEB_SEARCH_FORCE_TOOL` | No | - | Models that always use the explicit `web_search` tool |
-| `MULTI_WEB_SEARCH_FORCE_NATIVE` | No | - | Models that never get the tool |
-| `MULTI_WEB_SEARCH_FALLBACK_MODEL` | No | - | Model to retry with when the default fails |
-| `MULTI_WEB_SEARCH_TIMEOUT_MS` | No | `25000` | Max wait for the first output, per attempt: streamed thinking (`reasoning_content`) or the first word of the answer. The model searches during this time; healthy answers start in 3-12 s, and thinking models stream their thinking within about 6 s even when they think 40-80 s before answering (`gemini-4-hydrogen` at `high`). A request that stays silent this long is dropped and sent once more, which usually reaches a working upstream account. Once output starts, the call keeps going while it arrives, up to 180 s in total |
-| `MULTI_WEB_SEARCH_IDLE_TIMEOUT_MS` | No | `30000` | After output starts, how long a stream may go without thinking or answer text before it is cut. Relay keep-alive pings don't reset it. Grok can pause about 15 s mid-answer to run another search. A stream cut mid-answer returns what it has, marked as possibly cut off; one cut while still thinking is sent once more |
-| `MULTI_WEB_SEARCH_REASONING_EFFORT` | No | not sent | `low` / `medium` / `high`, sent with every request. A model that rejects it (a 400 naming the parameter, or a 422 such as ChatGPT relays return) is retried once without it, and the parameter is skipped for that model afterwards |
-| `MULTI_WEB_SEARCH_FOCUS` | No | none | Default `focus` (`broad` or `precise`) for calls that don't set one. Callers can pass `normal` to skip it |
-| `MULTI_WEB_SEARCH_LANGUAGE` | No | `topic` | Which languages the model searches in. `topic`: the query's language, plus English for technical or international topics, plus the local language for local topics (Chinese whenever the question may concern China, even if asked in English). `bilingual`: always English and Chinese. Both answer in the query's language |
-| `MULTI_WEB_SEARCH_ALIAS` | No | off | `1` also exposes the tool as `web_search` |
-
-`FORCE_TOOL` / `FORCE_NATIVE` entries match an exact model name or a fragment (`gemini` matches `gemini-3.8-flash`). An exact name beats a fragment. Models in neither list use tool mode if their name contains `grok`, `gpt` or `search`.
-
-## Tool
-
-`multi_api_web_search` returns an answer and a numbered source list as plain text. Links that differ only in `utm_*` tracking parameters count as one source. When the endpoint sends its sources as data and also repeats them as a `Sources:` list at the end of the answer (chatgpt2api tool mode does), that copy is removed from the answer.
-
-- `query` *(string, required)*: search query or question.
-- `model` *(string, optional)*: a model name or `hybrid`. The tool description lists your configured models.
-- `max_sources` *(number, optional)*: 1-30, default 15.
-- `focus` *(`precise` | `broad` | `normal`, optional)*: picks the built-in instructions sent to the model. `broad` asks for wide exploration: several searches from different angles and source types, many distinct items grouped by direction, and up to 30 sources. In tests with Gemini, `broad` cited 35 arXiv papers across 6 research answers. All 35 existed, and about 32 matched their description; the default prompt cited 2. `broad` answers run about 5x longer, so it is meant for open-ended questions, not single facts. `precise` asks for one current fact, checked against the newest primary source. With Gemini it measured the same as the default prompt. Leave `focus` empty, or pass `normal`, for a short balanced answer. Every prompt includes today's date.
-- `reasoning_effort` *(`low` | `medium` | `high`, optional)*: overrides the default for one call.
-
-No `temperature` is sent, so each model uses its own default. Gemini 3 models are tuned for their default of 1.0. A model that returns an empty answer counts as failed, so the fallback model or the other hybrid models take over.
-
-### Search language
-
-The search model, not this server, picks the search terms, so the language rule lives in its instructions. In a test of 24 questions (14 about China, 8 about the US or English-language communities, 2 with good sources in both), each asked in Chinese and in English on two models, with no rule:
-
-- English questions about China that did not name the country failed: asked for the annual pre-tax cap on private pension contributions, both models replied "which country?", and a question about delivery riders' views got 1 Chinese source out of 24.
-- `bilingual` fixed those, but answered 3 Chinese questions in English and added 25-33% Chinese sources to questions that had good English ones.
-- The shipped `topic` rule (plus "never reply with a clarifying question; answer the most likely reading") answered all 28 checkable questions correctly in both languages on both models, the pension question 6 of 6 times when asked in English. English questions about China drew 78% Chinese sources on `auto`; English-topic questions stayed at 0-1% Chinese sources, and answer time stayed at 8-12 s.
-
-Calling agents mostly pick the query language by topic already: Claude Code and Codex both searched in Chinese when asked in English about a Chinese channel, and in English when asked in Chinese about Node.js. The `query` description also asks them to name the country or region in the query.
-
-## Development
-
-```bash
-npm test
-```
-
-The tests run against a local mock endpoint. No API key needed.
+| :--- | :---: | :---: | :--- |
+| `MULTI_WEB_SEARCH_BASE_URL` | Yes | - | OpenAI-compatible `/v1` base URL |
+| `MULTI_WEB_SEARCH_API_KEY` | Yes | - | API key for the endpoint |
+| `MULTI_WEB_SEARCH_MODEL` | No | - | Default model name, or `hybrid` |
+| `MULTI_WEB_SEARCH_HYBRID_MODELS` | No | - | Comma-separated models used when `model=hybrid` |
+| `MULTI_WEB_SEARCH_FALLBACK_MODEL` | No | - | Fallback model when the primary model fails |
+| `MULTI_WEB_SEARCH_FORCE_TOOL` | No | - | Comma-separated models/fragments forced to explicit `web_search` tool mode |
+| `MULTI_WEB_SEARCH_FORCE_NATIVE` | No | - | Comma-separated models/fragments forced to native search mode |
+| `MULTI_WEB_SEARCH_TIMEOUT_MS` | No | `25000` | Max wait (ms) for first streamed thinking/answer token before retrying |
+| `MULTI_WEB_SEARCH_IDLE_TIMEOUT_MS` | No | `30000` | Max idle gap (ms) after streaming starts before cutting the stream |
+| `MULTI_WEB_SEARCH_REASONING_EFFORT` | No | unset | Default reasoning effort (`low` / `medium` / `high`); auto-skipped for models that reject it |
+| `MULTI_WEB_SEARCH_FOCUS` | No | unset | Default `focus` mode (`broad` or `precise`) when not specified by caller |
+| `MULTI_WEB_SEARCH_LANGUAGE` | No | `topic` | Search term language strategy: `topic` (by topic/region) or `bilingual` (always EN + ZH) |
+| `MULTI_WEB_SEARCH_ALIAS` | No | off | Set to `1` to also register the tool as `web_search` |
 
 ## License
 
